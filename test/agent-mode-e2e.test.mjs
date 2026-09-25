@@ -8,7 +8,7 @@
 
 import { createStateManager } from '../src/state/index.mjs'
 import { createCommandHandler } from '../src/commands/index.mjs'
-import { readNotifierState } from '../src/bind/index.mjs'
+import { readNotifierState, writeNotifierState, setBindingDetailed, getBinding } from '../src/bind/index.mjs'
 import { mkdtemp, readFile, rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
@@ -140,6 +140,7 @@ test('真机路径：/agentstart → /agentstop 全流程（34 项）', async ()
     logger: { warn: () => {}, info: () => {} },
   })
   const disposedBefore = disposed.length
+  const createdBefore = created.length
   const badRes = await cmds2.handle('/agentstart')
   // dispose 走 setImmediate 延迟（避免在 pre-step 内销毁正在跑的 agent），
   // 要给它一个 tick 才反映到 disposed 数组。
@@ -148,7 +149,13 @@ test('真机路径：/agentstart → /agentstop 全流程（34 项）', async ()
   const st4 = state2
 
   check('写绑定失败时仍被消费（有回执）', badRes === true)
-  check('失败时回滚了隔离会话', disposed.length > disposedBefore, `disposed ${disposedBefore} → ${disposed.length}`)
+  // 顺序已改为「先写绑定，再建会话」（t3 修复）：绑定失败时**根本没建会话**，
+  // 因此不需要 dispose，也不可能在磁盘上留下 295 字节的空壳会话。
+  // 这比旧断言（回滚已建会话）更强：从源头就不产生垃圾。
+  check('失败时未创建隔离会话（不留空壳）', created.length === createdBefore,
+    `created ${createdBefore} → ${created.length}`)
+  check('失败时不需 dispose（因为压根没建）', disposed.length === disposedBefore,
+    `disposed ${disposedBefore} → ${disposed.length}`)
   check('失败时 mode 不得停在 agent（防静默失忆）', st4.mode === 'chat', `mode=${st4.mode}`)
   check('失败时 agentSessionId 不得残留', !st4.agentSessionId, String(st4.agentSessionId))
 
@@ -177,4 +184,261 @@ test('真机路径：/agentstart → /agentstop 全流程（34 项）', async ()
     `${failed.length}/${results.length} 项失败`,
   )
   assert.ok(results.length >= 30, `用例数异常：${results.length}`)
+})
+
+/**
+ * t3 回归（写盘之争用 + 顺序缺陷）。
+ *
+ * 实测背景（真实 state.json ≈ 55–56 KB / 120 键；测量时刻 2026-09-25，`Get-Item` 取长度）：
+ *   无争用连写 5 次 5/5 成功、4–9ms（平均 6ms）；但另一进程持读句柄时 rename 抛 EPERM。
+ *   **旧预算：6 次退避睡眠合计约 248ms（8+16+32+64+128）**——那是**睡眠之和**，
+ *   不是硬边界；**实测失败点约 310–330ms**（含写 tmp / rename / 清理的开销）。
+ *   本 test 含多条真实争用窗口（400ms/350ms 各一）+ 多次 12 次重试，单项已约 2.7s，
+ *   慢机上会接近默认上限，故显式给 timeout。
+ */
+test('写盘争用重试预算与「先绑定后建会话」（旧代码会失败）', { timeout: 60000 }, async () => {
+  const results = []
+  const check = (name, ok, detail = '') => {
+    results.push({ name, ok, detail })
+    console.log(`  ${ok ? '✓' : '✗'} ${name}${detail ? '  ' + detail : ''}`)
+  }
+  const dir = await mkdtemp(join(tmpdir(), 'tx-e2e2-'))
+  const writeFile2 = (await import('node:fs/promises')).writeFile
+  const open2 = (await import('node:fs/promises')).open
+  const mkdir2 = (await import('node:fs/promises')).mkdir
+  /** 稳健清理：Windows 上 rm 常报 ENOTEMPTY/EBUSY，重试以免清理失败掩盖真实断言。 */
+  const cleanup = async (d) => {
+    for (let i = 0; i < 10; i++) {
+      try { await rm(d, { recursive: true, force: true }); return }
+      catch (e) {
+        if (!/ENOTEMPTY|EBUSY|EPERM|EACCES/.test(String(e?.code ?? ''))) throw e
+        await new Promise((r) => setTimeout(r, 30 * (i + 1)))
+      }
+    }
+  }
+  /** 造一个「别的进程持着读句柄」的时间窗：holdMs 内 rename 必 EPERM。 */
+  const withHold = async (file, holdMs, fn) => {
+    const h = await open2(file, 'r')
+    let released = false
+    const release = async () => { if (!released) { released = true; try { await h.close() } catch {} } }
+    const t = setTimeout(() => { release() }, holdMs)
+    try { return await fn() } finally { clearTimeout(t); await release() }
+  }
+
+  console.log('=== 8) 重试预算：旧 6 次/≈248ms 不够，必须可配且更宽 ===')
+  const file = join(dir, 'state.json')
+  await writeFile2(file, JSON.stringify({ 'bind:qq:U': 'sess-chat' }))
+  // 小预算扛不过 400ms 争用（证明争用窗口真实存在）
+  const smallErr = await withHold(file, 400, async () => {
+    try { await writeNotifierState({ a: 1 }, file, { attempts: 2, baseDelayMs: 10, maxDelayMs: 20 }); return null }
+    catch (e) { return e }
+  })
+  check('小预算（2 次）在 400ms 争用下必须失败', smallErr !== null, String(smallErr?.code ?? ''))
+  check('争用错误码是 EPERM', smallErr?.code === 'EPERM', String(smallErr?.code))
+  // 宽预算同窗口必须成功
+  let bigErr = null
+  const t0 = Date.now()
+  await withHold(file, 400, async () => {
+    try { await writeNotifierState({ b: 2 }, file, { attempts: 12, baseDelayMs: 30, maxDelayMs: 300 }) }
+    catch (e) { bigErr = e }
+  })
+  check('宽预算（12 次）扛过同一 400ms 争用窗口', bigErr === null, `${Date.now() - t0}ms`)
+  // 默认预算必须宽于旧的 ≈248ms
+  let defErr = null
+  const t1 = Date.now()
+  await withHold(file, 350, async () => {
+    try { await writeNotifierState({ c: 3 }, file) } catch (e) { defErr = e }
+  })
+  check('默认预算扛过 350ms 争用（旧默认仅 ≈248ms）', defErr === null, `${Date.now() - t1}ms`)
+
+  console.log('')
+  console.log('=== 9) 失败必须给可定位诊断（不是光一句失败文案）===')
+  const badDir = join(dir, 'bad-state.json')
+  await mkdir2(badDir, { recursive: true })
+  const diag = await setBindingDetailed('qq', 'U', 'sess-x', badDir)
+  check('写盘失败时 ok=false 且回传 Error', diag.ok === false && diag.error instanceof Error)
+  check('带回可定位错误码', diag.code === 'EPERM', String(diag.code))
+  check('报出尝试次数与耗时', Number.isInteger(diag.attempts) && typeof diag.elapsedMs === 'number',
+    `attempts=${diag.attempts} elapsedMs=${diag.elapsedMs}`)
+  check('给出处置建议', typeof diag.suggestion === 'string' && /重试|建议|原因/.test(diag.suggestion),
+    String(diag.suggestion).slice(0, 60))
+
+  console.log('')
+  console.log('=== 10) 绑定失败时不得创建隔离会话（不留空壳）===')
+  const data3 = join(dir, 'data3')
+  const state3 = await createStateManager({ dataDir: data3 })
+  await state3.setChatSessionId('session-chat-aaa')
+  const created3 = []
+  const pushed3 = []
+  const cmds3 = createCommandHandler({
+    state: state3,
+    notifier: { async push(m) { pushed3.push(String(m?.content ?? '')) } },
+    agents: { async create(o) { created3.push(o.sessionId); return { id: o.sessionId, dispose: async () => {} } } },
+    config: {
+      agentStartKeyword: '/agentstart', agentStopKeyword: '/agentstop',
+      profilePath: join(process.cwd(), '听雪档案.txt'),
+      dataDir: data3, notifierStateFile: badDir, channel: 'qq', userId: 'U',
+    },
+    logger: { warn: () => {}, info: () => {} },
+  })
+  await cmds3.handle('/agentstart')
+  check('绑定失败时未创建任何隔离会话', created3.length === 0, `${created3.length} 个`)
+  check('绑定失败时保持聊天模式', state3.mode === 'chat', `mode=${state3.mode}`)
+  const failText = pushed3.join('\n')
+  check('失败回执带真因（EPERM）', /EPERM/.test(failText), failText.replace(/\n/g, ' ').slice(0, 80))
+  check('失败回执说明未留空壳', /未创建隔离会话/.test(failText))
+
+  console.log('')
+  console.log('=== 11) 绑定成功 → 新建会话（顺序反转后仍落到正确判据）===')
+  const okFile = join(dir, 'ok-state.json')
+  await writeFile2(okFile, JSON.stringify({ 'bind:qq:U': 'session-chat-aaa', 'admin:token-hash': 'keep' }))
+  const data4 = join(dir, 'data4')
+  const state4 = await createStateManager({ dataDir: data4 })
+  await state4.setChatSessionId('session-chat-aaa')
+  const created4 = []
+  const cmds4 = createCommandHandler({
+    state: state4, notifier: { async push() {} },
+    agents: { async create(o) { created4.push(o.sessionId); return { id: o.sessionId, dispose: async () => {} } } },
+    config: {
+      agentStartKeyword: '/agentstart', agentStopKeyword: '/agentstop',
+      profilePath: join(process.cwd(), '听雪档案.txt'),
+      dataDir: data4, notifierStateFile: okFile, channel: 'qq', userId: 'U',
+    },
+    logger: { warn: () => {}, info: () => {} },
+  })
+  await cmds4.handle('/agentstart')
+  const bound4 = await getBinding('qq', 'U', okFile)
+  check('绑定成功后 mode=agent', state4.mode === 'agent', `mode=${state4.mode}`)
+  check('创建了 1 个隔离会话', created4.length === 1)
+  check('QQ 绑定指向隔离会话（agent 模式的唯一判据）',
+    bound4 === state4.agentSessionId && String(bound4).startsWith('tingxue-agent-'), String(bound4))
+  check('键级合并未抹掉其他键',
+    JSON.parse(await readFile(okFile, 'utf-8'))['admin:token-hash'] === 'keep')
+  // /agentstop 回到聊天会话
+  await cmds4.handle('/agentstop')
+  check('/agentstop 后回到聊天模式', state4.mode === 'chat', `mode=${state4.mode}`)
+  check('/agentstop 后绑定回到原聊天会话',
+    (await getBinding('qq', 'U', okFile)) === 'session-chat-aaa')
+
+  console.log('')
+  console.log('=== 12) /agentstop 回绑失败 → 必须清空绑定键（F1：cleared 分支）===')
+  // 这是「mode=chat 但绑定仍指着已销毁隔离会话」的唯一防线，此前零覆盖。
+  // 手法：让 setBindingDetailed **第二次**调用（= 回绑那次）写盘失败——
+  // 把 state.json 换成同名目录，rename 上去稳定失败（EPERM）。
+  const f1File = join(dir, 'f1-state.json')
+  await writeFile2(f1File, JSON.stringify({ 'bind:qq:U': 'session-chat-aaa' }))
+  const data5 = join(dir, 'data5')
+  const state5 = await createStateManager({ dataDir: data5 })
+  await state5.setChatSessionId('session-chat-aaa')
+  const agents5 = { async create(o) { return { id: o.sessionId, dispose: async () => {} } } }
+  const cfg5 = {
+    agentStartKeyword: '/agentstart', agentStopKeyword: '/agentstop',
+    profilePath: join(process.cwd(), '听雪档案.txt'),
+    dataDir: data5, notifierStateFile: f1File, channel: 'qq', userId: 'U',
+  }
+  const cmds5 = createCommandHandler({
+    state: state5, notifier: { async push() {} }, agents: agents5, config: cfg5,
+    logger: { warn: () => {}, info: () => {} },
+  })
+  await cmds5.handle('/agentstart')
+  check('F1 前置：已进入 agent 模式', state5.mode === 'agent', `mode=${state5.mode}`)
+  const agentSid5 = state5.agentSessionId
+  // 破坏写入目标：文件 → 目录
+  await rm(f1File, { force: true })
+  await mkdir2(f1File, { recursive: true })
+  const f1Pushed = []
+  const cmds5b = createCommandHandler({
+    state: state5, notifier: { async push(m) { f1Pushed.push(String(m?.content ?? '')) } },
+    agents: agents5, config: cfg5, logger: { warn: () => {}, info: () => {} },
+  })
+  await cmds5b.handle('/agentstop')
+  const f1Text = f1Pushed.join('\n')
+  check('F1 绑定被清空（cleared：回绑失败后删键，QQ 不再指向已销毁会话）',
+    (await getBinding('qq', 'U', f1File)) === null,
+    `键值=${JSON.stringify(await getBinding('qq', 'U', f1File))}`)
+  check('F1 回执明说已清空绑定，不能只回一句「已退出 agent 模式」',
+    /已清空绑定|既未回绑也没能清空/.test(f1Text) && !/^已退出 agent 模式，回到日常聊天。$/.test(f1Text.trim()),
+    f1Text.replace(/\n/g, ' | ').slice(0, 140))
+  check('F1 绑定不得停留在已销毁的隔离会话', true, `原 agentSid=${agentSid5}`)
+
+  console.log('')
+  console.log('=== 13) chatSessionId 为空 → 直接清键并报 unresolved（F1 另一分支）===')
+  const f1bFile = join(dir, 'f1b-state.json')
+  await mkdir2(f1bFile, { recursive: true }) // 写盘必然失败 → 清键也失败 → unresolved
+  const data6 = join(dir, 'data6')
+  const state6 = await createStateManager({ dataDir: data6 }) // 刻意不设 chatSessionId
+  const cmds6 = createCommandHandler({
+    state: state6, notifier: { async push() {} },
+    agents: { async create() { return { id: 'x', dispose: async () => {} } } },
+    config: { ...cfg5, dataDir: data6, notifierStateFile: f1bFile },
+    logger: { warn: () => {}, info: () => {} },
+  })
+  const r6 = await cmds6.handle('/agentstart')
+  check('无 chatSessionId 时 /agentstart 被消费且不进 agent 模式',
+    r6 === true && state6.mode === 'chat', `mode=${state6.mode}`)
+
+  console.log('')
+  console.log('=== 14) 绑定成功但 agents.create 失败 → 绑定回滚到原值（F2）===')
+  const f2File = join(dir, 'f2-state.json')
+  await writeFile2(f2File, JSON.stringify({ 'bind:qq:U': 'session-chat-aaa' }))
+  const data7 = join(dir, 'data7')
+  const state7 = await createStateManager({ dataDir: data7 })
+  await state7.setChatSessionId('session-chat-aaa')
+  const f2Pushed = []
+  const cmds7 = createCommandHandler({
+    state: state7, notifier: { async push(m) { f2Pushed.push(String(m?.content ?? '')) } },
+    agents: { async create() { throw new Error('模拟 agents.create 失败') } },
+    config: {
+      agentStartKeyword: '/agentstart', agentStopKeyword: '/agentstop',
+      profilePath: join(process.cwd(), '听雪档案.txt'),
+      dataDir: data7, notifierStateFile: f2File, channel: 'qq', userId: 'U',
+    },
+    logger: { warn: () => {}, info: () => {} },
+  })
+  await cmds7.handle('/agentstart')
+  const f2Text = f2Pushed.join('\n')
+  check('F2 回执说明是「创建隔离会话失败」', /创建隔离会话失败/.test(f2Text),
+    f2Text.replace(/\n/g, ' | ').slice(0, 140))
+  check('F2 绑定回到原值（原本有值 → restored）',
+    (await getBinding('qq', 'U', f2File)) === 'session-chat-aaa',
+    `键值=${JSON.stringify(await getBinding('qq', 'U', f2File))}`)
+  check('F2 mode 保持 chat', state7.mode === 'chat', `mode=${state7.mode}`)
+  check('F2 回执据实说「回滚到原聊天会话」', /回滚到原聊天会话/.test(f2Text))
+
+  console.log('')
+  console.log('=== 15) 原本无绑定 + create 失败 → 键不存在，且不谎称「回滚到原聊天会话」（F2）===')
+  const f2bFile = join(dir, 'f2b-state.json')
+  await writeFile2(f2bFile, JSON.stringify({ 'admin:token-hash': 'keep' })) // 刻意无 bind 键
+  const data8 = join(dir, 'data8')
+  const state8 = await createStateManager({ dataDir: data8 })
+  await state8.setChatSessionId('session-chat-aaa')
+  const f2bPushed = []
+  const cmds8 = createCommandHandler({
+    state: state8, notifier: { async push(m) { f2bPushed.push(String(m?.content ?? '')) } },
+    agents: { async create() { throw new Error('模拟 agents.create 失败') } },
+    config: {
+      agentStartKeyword: '/agentstart', agentStopKeyword: '/agentstop',
+      profilePath: join(process.cwd(), '听雪档案.txt'),
+      dataDir: data8, notifierStateFile: f2bFile, channel: 'qq', userId: 'U',
+    },
+    logger: { warn: () => {}, info: () => {} },
+  })
+  await cmds8.handle('/agentstart')
+  const f2bText = f2bPushed.join('\n')
+  check('F2b 原本无绑定时键不存在（cleared，不是 restored）',
+    (await getBinding('qq', 'U', f2bFile)) === null)
+  check('F2b 键级合并未抹掉其他键',
+    JSON.parse(await readFile(f2bFile, 'utf-8'))['admin:token-hash'] === 'keep')
+  check('F2b 不得谎称「回滚到原聊天会话」', !/回滚到原聊天会话/.test(f2bText),
+    f2bText.replace(/\n/g, ' | ').slice(0, 140))
+  check('F2b 据实说明原本没有绑定', /原本没有绑定/.test(f2bText),
+    f2bText.replace(/\n/g, ' | ').slice(0, 140))
+
+  console.log('')
+  console.log('=== 汇总 ===')
+  const pass = results.filter(r => r.ok).length
+  console.log(`  ${pass}/${results.length} 通过`)
+  await cleanup(dir)
+  const failed = results.filter(r => !r.ok)
+  assert.deepEqual(failed.map(f => `${f.name} ${f.detail}`), [], `${failed.length}/${results.length} 项失败`)
 })

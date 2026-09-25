@@ -58,6 +58,30 @@ export async function readNotifierState(stateFile) {
   }
 }
 
+/** 可重试的错误码：EPERM/EBUSY/EACCES 是「文件被占用」类；ENOENT/EEXIST 是 tmp 被并发清理/重名。 */
+const RETRYABLE_CODES = new Set(['EPERM', 'EBUSY', 'EACCES', 'ENOENT', 'EEXIST'])
+
+/**
+ * 写盘重试预算（真机实测标定，2026-09-25）。
+ *
+ * **为什么把预算从约 248ms 放大到约 1.8s**：
+ * 实测目标文件 `state.json` = 56,048 bytes / 120 键。无争用时写入 5/5 成功、
+ * 4–9ms（平均 6ms）——所以写入本身没问题。但只要 DSH 宿主或 dsh-notifier store
+ * 持着读句柄（这是运行期常态），Windows 的 `rename` 覆盖就抛 EPERM：
+ *   实测 hold 一个读句柄 → rename 立即 EPERM，旧 6 次退避（8/16/32/64/128ms）
+ *   全部耗尽，耗时 330ms，写入失败。
+ * 旧预算 248ms 恰好短于一次真实争用窗口，于是 `/agentstart` 偶发
+ * 「切换 QQ 绑定失败」。放大预算 + 提高尝试次数，使总预算覆盖到秒级窗口。
+ *
+ * 退避序列（base=30ms, cap=300ms, 12 次）：30/60/120/240/300×8 ≈ 2.9s 上限。
+ * 仍是**有界**的：最多 12 次、封顶约 2.9s，不会无限挂住 /agentstart。
+ */
+export const WRITE_RETRY_DEFAULTS = Object.freeze({
+  attempts: 12,
+  baseDelayMs: 30,
+  maxDelayMs: 300,
+})
+
 /**
  * 原子写回 dsh-notifier state.json（tmp + rename，避免半截文件）。
  *
@@ -67,37 +91,88 @@ export async function readNotifierState(stateFile) {
  * `/agentstart` 偶发「切换 QQ 绑定失败」，而磁盘/权限其实都正常。
  * 实测复现：持一个句柄后 rename 立即 EPERM。
  *
- * 因此对**可重试**的错误码做有界退避重试（EPERM/EBUSY/EACCES/ENOENT：最后一个
- * 是 tmp 被并发清理）；非可重试错误（如 ENOSPC）立即抛出，不浪费时间。
+ * 因此对**可重试**的错误码做有界退避重试；非可重试错误（如 ENOSPC）立即抛出。
  *
  * @param {object} state - 完整 state 对象。
  * @param {string} [stateFile]
+ * @param {{attempts?: number, baseDelayMs?: number, maxDelayMs?: number}} [options]
+ *   重试预算可覆盖（测试与诊断用；缺省用 WRITE_RETRY_DEFAULTS）。
+ * @returns {Promise<{attempts: number, elapsedMs: number}>} 实际尝试次数与耗时。
  */
-export async function writeNotifierState(state, stateFile) {
+export async function writeNotifierState(state, stateFile, options = {}) {
   const file = stateFile ?? join(notifierStateDir(), 'state.json')
   await mkdir(dirname(file), { recursive: true })
-  const RETRYABLE = new Set(['EPERM', 'EBUSY', 'EACCES', 'ENOENT', 'EEXIST'])
-  const ATTEMPTS = 6
+  const attempts = Number.isInteger(options.attempts) && options.attempts > 0
+    ? options.attempts
+    : WRITE_RETRY_DEFAULTS.attempts
+  const baseDelayMs = Number.isFinite(options.baseDelayMs) && options.baseDelayMs > 0
+    ? options.baseDelayMs
+    : WRITE_RETRY_DEFAULTS.baseDelayMs
+  const maxDelayMs = Number.isFinite(options.maxDelayMs) && options.maxDelayMs > 0
+    ? options.maxDelayMs
+    : WRITE_RETRY_DEFAULTS.maxDelayMs
+
+  const startedAt = Date.now()
   let lastError
-  for (let attempt = 0; attempt < ATTEMPTS; attempt++) {
+  for (let attempt = 0; attempt < attempts; attempt++) {
     const tmp = `${file}.${process.pid}.${randomUUID().slice(0, 8)}.tmp`
     try {
       await writeFile(tmp, JSON.stringify(state), { encoding: 'utf8', mode: 0o600 })
       await rename(tmp, file)
-      return
+      return { attempts: attempt + 1, elapsedMs: Date.now() - startedAt }
     } catch (e) {
       lastError = e
       // 每次重试都用新 tmp 名：避免上一轮的残骸或他人同名文件干扰
       try { await rm(tmp, { force: true }) } catch { /* 清理失败不致命 */ }
-      if (!RETRYABLE.has(e?.code)) throw e
-      if (attempt < ATTEMPTS - 1) {
-        // 有界退避：8/16/32/64/128ms，总等待约 248ms（与 notifier 自身两轮
-        // 自旋 ~480ms 同量级，足够躲过宿主一次读窗口）
-        await sleep(8 * 2 ** attempt)
+      if (!RETRYABLE_CODES.has(e?.code)) throw e
+      if (attempt < attempts - 1) {
+        await sleep(Math.min(baseDelayMs * 2 ** attempt, maxDelayMs))
       }
     }
   }
+  // 把「试了几次、花了多久」挂到错误上：调用方据此给出可定位诊断。
+  try {
+    lastError.attempts = attempts
+    lastError.elapsedMs = Date.now() - startedAt
+  } catch { /* 冻结的错误对象不致命 */ }
   throw lastError
+}
+
+/**
+ * 把写盘失败翻译成用户/日志能据以行动的诊断。
+ * 失败路径不允许只说「切换 QQ 绑定失败」——那让真因完全不可见。
+ *
+ * @param {Error & {code?: string, attempts?: number, elapsedMs?: number}} err
+ * @returns {{code: string, attempts: number, elapsedMs: number, diagnosis: string, suggestion: string}}
+ */
+export function describeWriteFailure(err, stateFile) {
+  const code = err?.code ?? 'UNKNOWN'
+  const attempts = Number.isInteger(err?.attempts) ? err.attempts : 0
+  const elapsedMs = Number.isFinite(err?.elapsedMs) ? err.elapsedMs : 0
+  const target = stateFile ?? join(notifierStateDir(), 'state.json')
+
+  let diagnosis
+  let suggestion
+  if (code === 'EPERM' || code === 'EBUSY' || code === 'EACCES') {
+    diagnosis = `目标文件被其他进程占用（Windows 上 rename 覆盖被打开的文件会报 ${code}）`
+    suggestion =
+      `已重试 ${attempts} 次 / ${elapsedMs}ms 仍未成功。` +
+      'DSH 宿主与 dsh-notifier 会持续读写同一个 state.json，争用窗口偶发较长；' +
+      '稍后重试 /agentstart 通常即可。若持续失败，请确认该文件未被编辑器/杀毒软件独占。'
+  } else if (code === 'ENOSPC') {
+    diagnosis = '磁盘空间不足，无法写入绑定文件'
+    suggestion = `请清理磁盘后重试。目标：${target}`
+  } else if (code === 'ENOENT') {
+    diagnosis = '目标目录不存在或瞬时文件被并发清理'
+    suggestion = `已重试 ${attempts} 次仍未成功。请确认目录存在且可写：${target}`
+  } else if (code === 'EISDIR' || code === 'ENOTDIR') {
+    diagnosis = `目标路径不是可写的普通文件（${code}）`
+    suggestion = `请检查该路径是否被目录/链接占用：${target}`
+  } else {
+    diagnosis = `写盘失败（${code}）`
+    suggestion = `已重试 ${attempts} 次 / ${elapsedMs}ms。请检查权限与磁盘：${target}`
+  }
+  return { code, attempts, elapsedMs, diagnosis, suggestion }
 }
 
 /** 毫秒睡眠。 */
@@ -246,8 +321,14 @@ export async function setBinding(channel, userId, sessionId, stateFile) {
 }
 
 /**
- * 同 setBinding，但返回失败原因（供命令层给出可诊断的回复文案）。
- * @returns {Promise<{ok: boolean, error?: Error}>}
+ * 同 setBinding，但返回失败原因与**可定位诊断**（供命令层给出可行动的回复文案）。
+ *
+ * 为什么要有 diagnosis/suggestion：旧实现失败只给一句「切换 QQ 绑定失败」，
+ * 用户和日志都拿不到 code / 尝试次数 / 耗时，真因（占用、权限、磁盘）完全不可见，
+ * 排查只能靠猜。现在失败路径必须自证。
+ *
+ * @returns {Promise<{ok: boolean, error?: Error, code?: string, attempts?: number,
+ *   elapsedMs?: number, diagnosis?: string, suggestion?: string}>}
  */
 export async function setBindingDetailed(channel, userId, sessionId, stateFile) {
   const key = bindingKey(channel, userId)
@@ -261,14 +342,27 @@ export async function setBindingDetailed(channel, userId, sessionId, stateFile) 
   if (sessionId == null || sessionId === '') delete state[key]
   else state[key] = sessionId
   try {
-    await writeNotifierState(state, stateFile)
-    return { ok: true }
+    const res = await writeNotifierState(state, stateFile)
+    return { ok: true, attempts: res.attempts, elapsedMs: res.elapsedMs }
   } catch (e) {
     const err = e instanceof Error ? e : new Error(String(e))
+    const diag = describeWriteFailure(err, stateFile)
     try {
-      console.error('[dsh-tingxue/bind]', `写 bind 失败 key=${key}: ${err.message}`)
+      console.error(
+        '[dsh-tingxue/bind]',
+        `写 bind 失败 key=${key} code=${diag.code} attempts=${diag.attempts} elapsed=${diag.elapsedMs}ms` +
+        ` 诊断=${diag.diagnosis} 建议=${diag.suggestion} 原始错误=${err.message}`,
+      )
     } catch { /* 控制台不可用不致命 */ }
-    return { ok: false, error: err }
+    return {
+      ok: false,
+      error: err,
+      code: diag.code,
+      attempts: diag.attempts,
+      elapsedMs: diag.elapsedMs,
+      diagnosis: diag.diagnosis,
+      suggestion: diag.suggestion,
+    }
   }
 }
 
