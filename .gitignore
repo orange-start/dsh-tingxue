@@ -58,3 +58,12 @@ coverage/
 __pycache__/
 *.pyc
 *.pyo
+
+# ── 团队工作产物 / 临时脚本（不得提交：含本机路径与环境标识）──
+# REVIEW-BASELINE.md 由 reviewer 生成，含 QQ userId/appId 与本机绝对路径
+REVIEW-BASELINE.md
+# 成员写的临时探针脚本（下划线前缀约定）
+scripts/_*.mjs
+# 复现脚本与截图产物
+scripts/ui-repro.mjs
+scripts/artifacts/
