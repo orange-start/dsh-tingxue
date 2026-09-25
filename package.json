@@ -12,7 +12,7 @@
   "files": [
     "src",
     "client",
-    "scripts",
+    "scripts/selfcheck.mjs",
     "examples",
     "cordis.patch.yml",
     "README.md",

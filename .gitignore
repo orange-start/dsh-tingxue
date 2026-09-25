@@ -60,6 +60,10 @@ __pycache__/
 *.pyo
 
 # ── 团队工作产物 / 临时脚本（不得提交：含本机路径与环境标识）──
+# 注意：本文件只拦 git，**拦不住 npm 打包**。package.json 的 files 白名单一旦
+# 含整个目录（如 "scripts"），被这里忽略的文件照样进 tarball。实测过：
+# files:["scripts"] 会把 scripts/artifacts/*.png、ui-*.mjs 全打进 869 KB 的包。
+# 想挡必须在 files 里写明单个文件（现为 "scripts/selfcheck.mjs"）。
 # REVIEW-BASELINE.md 由 reviewer 生成，含 QQ userId/appId 与本机绝对路径
 REVIEW-BASELINE.md
 # 成员写的临时探针脚本（下划线前缀约定）
@@ -68,7 +72,10 @@ scripts/_*.mjs
 # 根级临时脚本（只在 scripts/ 写规则覆盖不到根目录）
 /_*.mjs
 # 复现脚本与截图产物
-scripts/ui-repro.mjs
+# 用 ui-*.mjs 通配一并覆盖 ui-repro/ui-metrics/ui-contrast/ui-make-pairs 等成员临时脚本
+scripts/ui-*.mjs
 scripts/artifacts/
 # 成员做 UI 时的临时工作目录（engineer-ui 在制品）
 client/.*.tmpdir/
+# 改前/改后对比中间件（engineer-ui 在制品，含本机路径）
+client/_*.client.js
