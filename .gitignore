@@ -64,6 +64,11 @@ __pycache__/
 REVIEW-BASELINE.md
 # 成员写的临时探针脚本（下划线前缀约定）
 scripts/_*.mjs
+
+# 根级临时脚本（只在 scripts/ 写规则覆盖不到根目录）
+/_*.mjs
 # 复现脚本与截图产物
 scripts/ui-repro.mjs
 scripts/artifacts/
+# 成员做 UI 时的临时工作目录（engineer-ui 在制品）
+client/.*.tmpdir/
