@@ -498,7 +498,7 @@ node scripts/selfcheck.mjs --full   # 解全部日志帧（默认只解尾部 20
 
 **零成本**：只读本地文件 + 打 `/health`、`/profile` 这类纯本地端点，**绝不**调用 `/memory/search` 之类会触发 embedding 的接口（那是要花钱的）。**只读**：不写记忆库、不改任何配置。
 
-检查项见 `test/selfcheck.test.mjs` 与 [交接文档.md](./交接文档.md) §17.16。核心判据是「同一轮内 system 长度必须唯一」——**新回合首条 header 天然带 `change` 是正常行为**，不是漂移；真正的 bug 特征是长度在一轮内出现多个值（记忆块中途消失）。
+检查项见 `test/selfcheck.test.mjs`。核心判据是「同一轮内 system 长度必须唯一」——**新回合首条 header 天然带 `change` 是正常行为**，不是漂移；真正的 bug 特征是长度在一轮内出现多个值（记忆块中途消失）。
 
 AstrBot 侧离线自检（不联网、不写记忆库）：
 

@@ -67,10 +67,10 @@
   "author": "DSH and oransky",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/oransky/dsh-tingxue.git"
+    "url": "git+https://github.com/orange-start/dsh-tingxue.git"
   },
   "bugs": {
-    "url": "https://github.com/oransky/dsh-tingxue/issues"
+    "url": "https://github.com/orange-start/dsh-tingxue/issues"
   },
-  "homepage": "https://github.com/oransky/dsh-tingxue#readme"
+  "homepage": "https://github.com/orange-start/dsh-tingxue#readme"
 }
