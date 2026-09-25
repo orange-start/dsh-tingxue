@@ -1,0 +1,80 @@
+name: CI
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: Test (Node ${{ matrix.node }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # 与 package.json 的 engines 对齐：^22.19.0 || >=24.0.0
+        node: ['22.19.0', '24.x']
+        os: [ubuntu-latest]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Syntax check (all sources)
+        shell: bash
+        run: |
+          fail=0
+          while IFS= read -r f; do
+            node --check "$f" || { echo "::error file=$f::syntax error"; fail=1; }
+          done < <(find src scripts -name '*.mjs' -o -name '*.js' | sort)
+          exit $fail
+
+      - name: Plugin loads
+        run: |
+          node -e "
+          import('./src/plugin-entry.mjs')
+            .then(m => {
+              if (!m.apply || !m.name) throw new Error('missing apply/name exports')
+              console.log('plugin loads OK:', m.name)
+            })
+            .catch(e => { console.error(e); process.exit(1) })
+          "
+
+      - name: Run tests
+        # 逐个文件跑，不用 `node --test <glob>`：
+        # 在部分受限环境里 node --test 的 spawn 会 EPERM，直接运行测试文件更稳。
+        shell: bash
+        run: |
+          fail=0
+          for f in $(find test -name '*.test.mjs' | sort); do
+            echo "── $f"
+            node "$f" || fail=1
+          done
+          exit $fail
+
+  astrbot:
+    name: AstrBot plugin (offline self-check)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Offline self-check
+        # 用 _stub/ 里的最小 astrbot.api / aiohttp 桩，不联网、不写记忆库
+        working-directory: astrbot-plugin
+        run: python test_private_handler.py

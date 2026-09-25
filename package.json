@@ -1,0 +1,76 @@
+{
+  "name": "dsh-tingxue",
+  "version": "0.1.0",
+  "description": "听雪 · 双模式虚拟生命系统：LanceDB 自建向量记忆库 + 自建实体关系图谱 + 小 LLM 语义推理，聊天模式与 agent 模式双模式，全部交互在 QQ（dsh-notifier）。",
+  "type": "module",
+  "main": "src/plugin-entry.mjs",
+  "exports": {
+    ".": "./src/plugin-entry.mjs",
+    "./client": "./client/client.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "src",
+    "client",
+    "scripts",
+    "examples",
+    "cordis.patch.yml",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "test": "node --test \"test/*.test.mjs\"",
+    "test:qqsegment": "node \"test/patches/_qq-segment.test.mjs\"",
+    "selfcheck": "node scripts/selfcheck.mjs"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web"
+    }
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "^4.0.1",
+    "@deepseek-ai/schemastery": "^3.18.1",
+    "dsh-notifier": "^0.9.0"
+  },
+  "peerDependenciesMeta": {
+    "@deepseek-ai/schemastery": {
+      "optional": true
+    },
+    "dsh-notifier": {
+      "optional": true
+    }
+  },
+  "dependencies": {
+    "@lancedb/lancedb": "^0.37.1",
+    "apache-arrow": "18.1.0"
+  },
+  "keywords": [
+    "dsh",
+    "deepseek-harness",
+    "plugin",
+    "memory",
+    "vector-database",
+    "lancedb",
+    "chatbot",
+    "virtual-life",
+    "qq",
+    "astrbot"
+  ],
+  "engines": {
+    "node": "^22.19.0 || >=24.0.0"
+  },
+  "license": "MIT",
+  "author": "DSH and oransky",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/oransky/dsh-tingxue.git"
+  },
+  "bugs": {
+    "url": "https://github.com/oransky/dsh-tingxue/issues"
+  },
+  "homepage": "https://github.com/oransky/dsh-tingxue#readme"
+}

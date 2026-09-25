@@ -1,0 +1,6 @@
+name: astrbot_plugin_tingxue_memory
+display_name: 听雪记忆服务
+desc: 对接 DSH 侧 dsh-tingxue 记忆服务（8766），群聊与私聊消息自动写入记忆（独立开关）、语义检索、图谱查看。
+version: v1.3.0
+author: oransky
+repo: https://github.com/oransky/astrbot_plugin_tingxue_memory

@@ -1,0 +1,60 @@
+# 依赖
+node_modules/
+.pnpm-store/
+
+# 记忆库数据（本地文件即库，不应入库）
+.dsh-tingxue-data/
+*.lance/
+
+# 运行期产物
+workcopy/
+*.log
+logs/
+
+# 调研/第三方快照（SAG 源码等，仅本地备查，不入库）
+research/
+
+# 依赖锁：本项目是「库」，不提交 lock（应用才提交）。
+# 实测：删掉后 pnpm install 从 package.json 正常解析（exit 0）。
+# 同时删掉的 pnpm-workspace.yaml 里 allowBuilds 抄的是 profile 的包（sharp/onnxruntime），与本项目无关。
+pnpm-lock.yaml
+pnpm-workspace.yaml
+
+# 内部文档与凭据（含隐私，切勿提交）
+交接文档.md
+交接文档-听雪agent模式修复.md
+项目规范化与优化-交接文档.md
+需求规格.md
+调研报告-*.md
+记忆库主干架构*.md
+astrbot接入方案.md
+发布注意事项.md
+发布形态与安装流程.md
+上游协作与依赖决策.md
+回帖草稿-issue36.md
+聊天记录.txt
+听雪档案.txt
+*.bak-*
+_profile-patch-backup.yml
+
+# 编辑器与系统
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+
+# 环境与凭据（切勿提交）
+.env
+.env.*
+.credentials.yaml
+*.key
+
+# 测试与构建缓存
+coverage/
+*.tsbuildinfo
+
+# Python（AstrBot 侧插件）
+__pycache__/
+*.pyc
+*.pyo

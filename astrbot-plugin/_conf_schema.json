@@ -1,0 +1,74 @@
+{
+  "memory_service_url": {
+    "type": "string",
+    "description": "记忆服务地址",
+    "hint": "DSH 侧 dsh-tingxue 记忆服务的 HTTP 地址。默认本机 8766。",
+    "default": "http://127.0.0.1:8766"
+  },
+  "auto_memory": {
+    "type": "bool",
+    "description": "群聊消息自动写入记忆",
+    "hint": "开启后，收到群聊文本消息会自动写入听雪记忆库（后台异步，不打扰群聊）。私聊由 auto_memory_private 单独控制。",
+    "default": true
+  },
+  "auto_memory_private": {
+    "type": "bool",
+    "description": "私聊消息自动写入记忆",
+    "hint": "开启后，收到私聊文本消息（好友私聊 / WebUI 网页聊天）会自动写入听雪记忆库，scene='private'。与群聊开关相互独立。",
+    "default": true
+  },
+  "ignored_groups": {
+    "type": "list",
+    "items": {
+      "type": "int"
+    },
+    "description": "忽略的群号（这些群的发言不自动记忆）",
+    "hint": "填入不想记录的 QQ 群号。私聊不受此项影响。",
+    "default": []
+  },
+  "ignored_users": {
+    "type": "list",
+    "items": {
+      "type": "string"
+    },
+    "description": "忽略的私聊用户（这些人的私聊不自动记忆）",
+    "hint": "填入不想记录记忆的私聊发送者 ID（字符串）。群聊不受此项影响。",
+    "default": []
+  },
+  "min_message_len": {
+    "type": "int",
+    "description": "自动记忆的最小消息长度（字符）",
+    "hint": "低于此长度的消息跳过（群聊与私聊通用），避免记录无意义短消息。默认 4。",
+    "default": 4
+  },
+  "private_speaker_prefix": {
+    "type": "bool",
+    "description": "私聊写入带说话人前缀",
+    "hint": "开启后私聊记忆写为「昵称：正文」，便于图谱把事实挂到具体人物节点上。关闭则写为「用户：正文」。",
+    "default": true
+  },
+  "inject_memory": {
+    "type": "bool",
+    "description": "LLM 请求时注入记忆",
+    "hint": "开启后，群聊与私聊的用户消息触发模型回复前，会按当前话题检索记忆库并把相关记忆注入 system prompt（位于滚动窗口历史上下文之前）。与人格注入相互独立。修复「提到关键词但模型没有上下文记忆」的问题。",
+    "default": true
+  },
+  "inject_profile": {
+    "type": "bool",
+    "description": "LLM 请求时注入人格",
+    "hint": "开启后，群聊与私聊的 LLM 请求会注入听雪人格（GET /profile），让回复自然保持听雪的设定与语气。与记忆注入相互独立。",
+    "default": true
+  },
+  "inject_limit": {
+    "type": "int",
+    "description": "每次注入的记忆条数",
+    "hint": "检索出的记忆 top-k 条数，默认 5。",
+    "default": 5
+  },
+  "inject_max_chars": {
+    "type": "int",
+    "description": "注入块预算（字符数）",
+    "hint": "注入内容超此长度会截断，避免占满 system prompt。默认 1800。",
+    "default": 1800
+  }
+}

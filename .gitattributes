@@ -1,0 +1,15 @@
+# 统一行尾与 Git 行为（发布规范）
+# .mjs / 文本文件统一 LF，避免 Windows core.autocrlf 造成跨平台差异
+* text=auto eol=lf
+
+# 补丁依赖精确行尾，禁止任何换行转换——防止 CRLF 让 hunk 失效
+*.patch -text
+
+# 锁文件不参与行尾转换
+pnpm-lock.yaml text eol=lf
+
+# 二进制
+*.png binary
+*.jpg binary
+*.gz binary
+*.jsonl.zstd binary

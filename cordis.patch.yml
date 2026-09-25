@@ -1,0 +1,30 @@
+# dsh-tingxue bundle patch: inserts the plugin row into the profile roster.
+# Install with `dsh plugin --profile web add file:/path/to/dsh-tingxue`.
+# The patch layer is applied through the loader on boot.
+- insert:
+    - id: dsh-tingxue
+      name: 'dsh-tingxue'
+      config:
+        enabled: true
+        # 听雪档案路径（用户自写的人格提示词 txt）
+        profilePath: ''
+        # 记忆库数据目录（LanceDB 本地文件即库）
+        dataDir: ''
+        # 向量模型（同库单一模型铁律）
+        embeddingModel: 'gemini-embedding-2'
+        # 向量维度（gemini-embedding-2 = 3072，已实测）
+        embeddingDimensions: 3072
+        # 语义推理小 LLM（实体抽取/摘要/关联）
+        llmModel: 'gemini-3.1-flash-lite'
+        # 最近 N 轮滑动窗口（1 轮 = 用户一句 + AI 一句）。
+        # 仅当打开「重复注入最近对话」时生效（该项默认关）：DSH 会话历史本身
+        # 已含最近对话，再注入一遍等于同一段话付两次 token，实测约 1.5K/轮。
+        recentRounds: 10
+        # 上下文预算（token）
+        memoryBudgetTokens: 1600
+        latestInfoBudgetTokens: 1000
+        # 触发关键词
+        agentStartKeyword: '/agentstart'
+        agentStopKeyword: '/agentstop'
+        # 文件删除范围：workcopy（删工作副本与中间产物，保留原始）
+        fileDeleteScope: 'workcopy'
