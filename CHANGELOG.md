@@ -50,5 +50,5 @@
 - AstrBot 群聊 / 私聊对接插件（Python）。
 - 模式自愈：写前守卫 + 启动自检 + 运行期 reconcile。判据为「agent 模式只有在 QQ 确实绑着该隔离会话时才算数」。
 
-[Unreleased]: https://github.com/orange-start/dsh-tingxue/compare/v0.1.0...HEAD
-[0.1.0]: https://github.com/orange-start/dsh-tingxue/releases/tag/v0.1.0
+[Unreleased]: https://github.com/oranskyx/dsh-tingxue/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/oranskyx/dsh-tingxue/releases/tag/v0.1.0
