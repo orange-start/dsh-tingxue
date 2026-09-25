@@ -109,6 +109,10 @@ window.__ModuleLoader__.load({
     /** 与 Host 半侧 MODEL_CATALOG_PATH 同一个路径。 */
     const CATALOG_PATH = '/dsh-tingxue/models'
 
+    /** 搜索框的类名与它那条 ::placeholder 规则的 id（全局唯一，避免重复注入）。 */
+    const PICKER_INPUT_CLASS = 'dsh-tingxue-picker-input'
+    const PICKER_PLACEHOLDER_STYLE_ID = 'dsh-tingxue-picker-placeholder'
+
     /**
      * 询问端点当前提供哪些模型。
      *
@@ -158,7 +162,18 @@ window.__ModuleLoader__.load({
         })
       }, [props.draft.modelBackend, props.draft.baseURL, props.draft.apiKey])
 
-      React.useEffect(() => { load() }, [load])
+      React.useEffect(() => {
+        load()
+        // placeholder 的颜色内联样式管不到，只能落在样式表里。DSH 自己也没有全局的
+        // input::placeholder 规则（每个输入框组件各带一条，互不越界），所以这条只
+        // 命中弹窗里这一个 input，不会影响宿主或其它插件的输入框。
+        if (!document.getElementById(PICKER_PLACEHOLDER_STYLE_ID)) {
+          const style = document.createElement('style')
+          style.id = PICKER_PLACEHOLDER_STYLE_ID
+          style.textContent = '.' + PICKER_INPUT_CLASS + '::placeholder{color:#5c5c66;opacity:1}'
+          document.head.appendChild(style)
+        }
+      }, [load])
 
       const all = rows || []
       const q = query.trim().toLowerCase()
@@ -183,6 +198,7 @@ window.__ModuleLoader__.load({
           h('div', { style: { fontSize: 11, opacity: 0.6, margin: '4px 0 8px' } }, tr('fetchDescription', '以下是该端点当前提供的模型，勾选要用的那个。')),
           h('input', {
             style: S.inputOnDark, type: 'text', value: query, autoFocus: true,
+            className: PICKER_INPUT_CLASS,
             placeholder: tr('searchPlaceholder', '搜索模型 id…'),
             onChange: (e) => { setQuery(e.target.value) },
           }),
@@ -393,9 +409,10 @@ window.__ModuleLoader__.load({
        * 而弹窗自带一块深色底，两者叠在一起时主题色会失灵。这里就按弹窗自己的底色配
        * 一套固定配色：白底 #fff、字 #1b1b1f（对比度约 19:1）。
        *
-       * placeholder 不写死颜色：内联样式管不到 ::placeholder，浏览器用的是宿主主题配色。
-       * 但无论宿主那条规则是 currentColor+opacity（跟随这里的 #1b1b1f）还是 UA 默认的
-       * 深灰，落在白底上都能看清 —— 关键只是别让底色再是透明的。
+       * placeholder 的颜色内联样式管不到（::placeholder 是伪元素），所以由 ModelPicker
+       * 挂载时注入一条只命中 .dsh-tingxue-picker-input 的规则：#5c5c66、opacity 1，
+       * 落在白底上约 5.9:1，达到 AA 正文要求。DSH 自己没有全局 input::placeholder
+       * 规则，这条不会波及宿主或其它插件的输入框。
        */
       inputOnDark: {
         width: '100%', boxSizing: 'border-box', padding: '6px 10px', fontSize: 12, borderRadius: 6,

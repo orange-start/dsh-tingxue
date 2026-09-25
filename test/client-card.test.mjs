@@ -126,6 +126,10 @@ t('模型选择弹窗的搜索框自带不透明底色', () => {
   if (!/color:\s*'#1b1b1f'/.test(body)) throw new Error('搜索框文字色没固定: ' + body)
   if (/background:\s*'transparent'/.test(body)) throw new Error('搜索框底色仍是 transparent')
   if (!/style:\s*S\.inputOnDark/.test(src)) throw new Error('搜索框没有用 S.inputOnDark')
+  // placeholder 只能靠样式表（内联样式管不到伪元素）。没有这条规则，白底上的
+  // placeholder 会落到浏览器默认的 currentColor + opacity .54，实测只有 3.74:1。
+  if (!/::placeholder\{color:#5c5c66;opacity:1\}/.test(src)) throw new Error('没有注入 ::placeholder 规则')
+  if (!/PICKER_INPUT_CLASS/.test(src)) throw new Error('搜索框没挂 PICKER_INPUT_CLASS')
 })
 // 同一处教训：弹窗自带固定深底，所以前景也必须固定，不能 color:inherit。
 t('模型选择弹窗固定前景色（不再 color:inherit）', () => {
