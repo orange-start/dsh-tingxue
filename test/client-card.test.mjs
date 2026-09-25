@@ -108,6 +108,34 @@ t('注册了 locale 字典', () => {
   if (localeRegistrations[0].ns !== 'settings.tingxue') throw new Error('ns=' + localeRegistrations[0].ns)
   const d = localeRegistrations[0].dict
   if (!d.zh || !d.en) throw new Error('缺 zh/en')
+  // t2 B：标题统一成「听雪」，「双模式虚拟生命系统」降为独立说明行。
+  if (d.zh.title !== '听雪') throw new Error('zh.title=' + d.zh.title)
+  if (d.zh.subtitle !== '双模式虚拟生命系统') throw new Error('zh.subtitle=' + d.zh.subtitle)
+  if (d.zh.nav !== '听雪') throw new Error('zh.nav=' + d.zh.nav)
+  if (d.en.title !== 'Tingxue') throw new Error('en.title=' + d.en.title)
+  if (!d.en.subtitle) throw new Error('缺 en.subtitle')
+})
+// t2 C：搜索框必须自带底色。旧代码用 S.input（background:transparent）叠在深色弹窗上，
+// 浅色主题下实测对比度只有 1.04:1（深底 + 深字）。这里守住「不再是 transparent」。
+t('模型选择弹窗的搜索框自带不透明底色', () => {
+  const src = source
+  const m = /inputOnDark:\s*\{([\s\S]*?)\}/.exec(src)
+  if (!m) throw new Error('找不到 inputOnDark 样式')
+  const body = m[1]
+  if (!/background:\s*'#ffffff'/.test(body)) throw new Error('搜索框底色不是纯白: ' + body)
+  if (!/color:\s*'#1b1b1f'/.test(body)) throw new Error('搜索框文字色没固定: ' + body)
+  if (/background:\s*'transparent'/.test(body)) throw new Error('搜索框底色仍是 transparent')
+  if (!/style:\s*S\.inputOnDark/.test(src)) throw new Error('搜索框没有用 S.inputOnDark')
+})
+// 同一处教训：弹窗自带固定深底，所以前景也必须固定，不能 color:inherit。
+t('模型选择弹窗固定前景色（不再 color:inherit）', () => {
+  // 注意 var(--dsh-fg, #e8e8ea) 里也有花括号内的逗号 → 用 \}(?=\s*,) 收尾，别越界到下一个样式。
+  const m = /modal:\s*\{([\s\S]*?)\}(?=\s*,)/.exec(source)
+  if (!m) throw new Error('找不到 modal 样式')
+  // 先去注释：注释里会写「不能 color:inherit」，那不是样式声明。
+  const body = m[1].replace(/\/\/[^\n]*/g, '')
+  if (/color:\s*'inherit'/.test(body)) throw new Error('弹窗仍在使用 color:inherit')
+  if (!/color:\s*'var\(--dsh-fg/.test(body)) throw new Error('弹窗前景没有固定: ' + body)
 })
 t('bind 了正确的命名空间', () => {
   if (scopeBinds.length !== 1) throw new Error('count=' + scopeBinds.length)
@@ -129,21 +157,14 @@ t('侧边栏 label 解析出「听雪」', () => {
   const label = sec.options.label()
   if (label !== '听雪') throw new Error('label=' + String(label))
 })
-t('注册进 settings.plugin.item（次入口）', () => {
-  const cardReg = slotRegistrations.find((r) => r.options.name === 'settings.plugin.item')
-  if (!cardReg) throw new Error('没有注册 settings.plugin.item')
-  const o = cardReg.options
-  if (o.key !== 'dsh-tingxue') throw new Error('key=' + o.key)
-  if (o.locale !== 'settings.tingxue') throw new Error('locale=' + o.locale)
-  if (typeof o.inject !== 'function') throw new Error('inject 不是函数')
-  if (typeof cardReg.Component !== 'function') throw new Error('Component 不是函数')
+// t2 拍板方案 A：只保留侧边栏入口。插件配置标签页里那张「同一个组件、同一份设置」
+// 的重复卡片必须不复存在 —— 这条用例在旧代码上会失败（旧代码注册了 plugin.item）。
+t('不再注册 settings.plugin.item（重复入口已移除）', () => {
+  const extra = slotRegistrations.filter((r) => r.options.name !== 'settings.section')
+  if (extra.length > 0) throw new Error('多出来的入口: ' + extra.map((r) => r.options.name).join(','))
 })
-t('两个入口共用同一个控制器', () => {
-  const sec = slotRegistrations.find((r) => r.options.name === 'settings.section')
-  const cardReg = slotRegistrations.find((r) => r.options.name === 'settings.plugin.item')
-  if (sec.options.inject().hooks.card !== cardReg.options.inject().hooks.card) {
-    throw new Error('两个入口的 store 不是同一个')
-  }
+t('只注册了一个槽位', () => {
+  if (slotRegistrations.length !== 1) throw new Error('count=' + slotRegistrations.length)
 })
 
 // —— 检查 inject() 面的形状 ——

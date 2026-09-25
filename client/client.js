@@ -22,7 +22,8 @@ window.__ModuleLoader__.load({
     const NS = 'settings.tingxue'
     const zh = {
       nav: '听雪',
-      title: '听雪 · 双模式虚拟生命系统',
+      title: '听雪',
+      subtitle: '双模式虚拟生命系统',
       description: '聊天模式与 agent 模式的人格、记忆库、模型、绑定与面板配置。改动在下次重启 DSH 后生效。',
       save: '保存',
       discard: '放弃',
@@ -54,7 +55,8 @@ window.__ModuleLoader__.load({
     }
     const en = {
       nav: 'Tingxue',
-      title: 'Tingxue · dual-mode virtual life system',
+      title: 'Tingxue',
+      subtitle: 'dual-mode virtual life system',
       description: 'Persona, memory store, models, binding and panel settings. Changes apply after the next DSH restart.',
       save: 'Save',
       discard: 'Discard',
@@ -180,7 +182,7 @@ window.__ModuleLoader__.load({
           ),
           h('div', { style: { fontSize: 11, opacity: 0.6, margin: '4px 0 8px' } }, tr('fetchDescription', '以下是该端点当前提供的模型，勾选要用的那个。')),
           h('input', {
-            style: S.input, type: 'text', value: query, autoFocus: true,
+            style: S.inputOnDark, type: 'text', value: query, autoFocus: true,
             placeholder: tr('searchPlaceholder', '搜索模型 id…'),
             onChange: (e) => { setQuery(e.target.value) },
           }),
@@ -374,11 +376,9 @@ window.__ModuleLoader__.load({
 
     // ── 样式（内联，自带外观）────────────────────────────────────────────────
     const S = {
-      card: { border: '1px solid var(--dsh-border, rgba(128,128,128,.28))', borderRadius: 10, padding: '12px 14px', marginBottom: 12 },
       page: { padding: '2px 2px 24px' },
       pageTitle: { fontSize: 16, fontWeight: 600 },
       head: { display: 'flex', alignItems: 'baseline', gap: 8, flexWrap: 'wrap' },
-      title: { fontWeight: 600, fontSize: 14 },
       badge: { fontSize: 11, opacity: 0.75, border: '1px solid currentColor', borderRadius: 999, padding: '0 6px' },
       desc: { fontSize: 12, opacity: 0.7, margin: '6px 0 10px', lineHeight: 1.5 },
       groupTitle: { fontSize: 11, fontWeight: 600, opacity: 0.6, margin: '12px 0 6px', letterSpacing: '.04em' },
@@ -386,6 +386,22 @@ window.__ModuleLoader__.load({
       label: { fontSize: 12, display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' },
       hint: { fontSize: 11, opacity: 0.55, display: 'block', marginTop: 1 },
       input: { width: '100%', boxSizing: 'border-box', padding: '4px 8px', fontSize: 12, borderRadius: 6, border: '1px solid var(--dsh-border, rgba(128,128,128,.35))', background: 'transparent', color: 'inherit' },
+      /**
+       * 模型选择弹窗的搜索框专用样式：明确的白底 + 深色字。
+       *
+       * 不复用 S.input —— 那份是「贴合宿主主题」的设置输入框（transparent + inherit），
+       * 而弹窗自带一块深色底，两者叠在一起时主题色会失灵。这里就按弹窗自己的底色配
+       * 一套固定配色：白底 #fff、字 #1b1b1f（对比度约 19:1）。
+       *
+       * placeholder 不写死颜色：内联样式管不到 ::placeholder，浏览器用的是宿主主题配色。
+       * 但无论宿主那条规则是 currentColor+opacity（跟随这里的 #1b1b1f）还是 UA 默认的
+       * 深灰，落在白底上都能看清 —— 关键只是别让底色再是透明的。
+       */
+      inputOnDark: {
+        width: '100%', boxSizing: 'border-box', padding: '6px 10px', fontSize: 12, borderRadius: 6,
+        border: '1px solid #3f3f46', background: '#ffffff', color: '#1b1b1f',
+        caretColor: '#1b1b1f', outline: 'none',
+      },
       reset: { fontSize: 11, padding: '2px 7px', borderRadius: 6, border: '1px solid var(--dsh-border, rgba(128,128,128,.35))', background: 'transparent', color: 'inherit', cursor: 'pointer' },
       btn: { fontSize: 12, padding: '3px 10px', borderRadius: 6, border: '1px solid var(--dsh-border, rgba(128,128,128,.35))', background: 'transparent', color: 'inherit', cursor: 'pointer' },
       err: { fontSize: 12, color: '#d9534f', marginTop: 8 },
@@ -397,7 +413,9 @@ window.__ModuleLoader__.load({
       },
       modal: {
         width: 'min(560px, 100%)', maxHeight: 'min(70vh, 560px)', display: 'flex', flexDirection: 'column',
-        background: 'var(--dsh-bg, #1b1b1f)', color: 'inherit', borderRadius: 12,
+        // 弹窗自带固定深底，所以前景也必须固定：color:'inherit' 会从宿主设置页继承，
+        // 在浅色主题下就是「深底 + 深字」，标题/说明/列表项全部看不见（实测 1.04:1）。
+        background: 'var(--dsh-bg, #1b1b1f)', color: 'var(--dsh-fg, #e8e8ea)', borderRadius: 12,
         border: '1px solid var(--dsh-border, rgba(128,128,128,.35))', padding: '14px 16px',
         boxShadow: '0 18px 48px rgba(0,0,0,.4)',
       },
@@ -405,22 +423,23 @@ window.__ModuleLoader__.load({
       modalBody: { flex: 1, overflowY: 'auto', marginTop: 8, paddingRight: 2 },
     }
 
-    // ── 卡片 / 页面组件 ─────────────────────────────────────────────────────
+    // ── 设置侧边栏页面 ──────────────────────────────────────────────────────
     /**
-     * 共享面板。variant='card' → 插件配置标签页里的一张卡；
-     * variant='section' → 设置侧边栏里独立的一项。
+     * 设置侧边栏里的独立一页（导航项「听雪」）。
+     *
+     * 只注册这一个入口：早先还在「设置 → 插件 → 插件配置」里挂过同一份设置的第二张
+     * 卡片，两处渲染同一个控制器、内容完全重复，用户明确要求只留侧边栏这一处。
      */
-    function TingxuePanel(props, variant) {
+    function TingxueSection(props) {
       const tr = makeT(props.t)
-      const box = variant === 'section' ? S.page : S.card
-      const titleStyle = variant === 'section' ? S.pageTitle : S.title
       const state = props.useCard ? props.useCard((s) => s) : undefined
-      const heading = () => h('span', { style: titleStyle }, tr('title', '听雪 · 双模式虚拟生命系统'))
+      // 命名与侧边栏 nav 统一成「听雪」；「双模式虚拟生命系统」降为下方说明行。
+      const heading = () => h('span', { style: S.pageTitle }, tr('title', '听雪'))
       if (!state || state.status === 'loading') {
-        return h('div', { style: box }, heading(), h('div', { style: S.desc }, tr('loading', '读取中…')))
+        return h('div', { style: S.page }, heading(), h('div', { style: S.desc }, tr('loading', '读取中…')))
       }
       if (state.status === 'unavailable' || !state.writable) {
-        return h('div', { style: box }, heading(), h('div', { style: S.desc }, tr('unavailable', '当前连接不可写。')))
+        return h('div', { style: S.page }, heading(), h('div', { style: S.desc }, tr('unavailable', '当前连接不可写。')))
       }
 
       const groupNodes = GROUPS.map((g) => {
@@ -457,20 +476,15 @@ window.__ModuleLoader__.load({
         }, state.saving ? tr('saving', '保存中…') : tr('save', '保存')),
       )
 
-      return h('div', { style: box },
+      return h('div', { style: S.page },
         head,
+        h('div', { style: S.desc }, tr('subtitle', '双模式虚拟生命系统')),
         h('div', { style: S.desc }, tr('description', '聊天模式与 agent 模式的人格、记忆库、模型、绑定与面板配置。改动在下次重启 DSH 后生效。')),
         ...groupNodes,
         state.error ? h('div', { style: S.err }, state.error) : null,
         h('div', { style: S.meta }, tr('restartHint', '标注「已覆盖」的字段会覆盖部署配置；重置即回落到部署层。')),
       )
     }
-
-    /** 插件配置标签页里的卡片形态。 */
-    function TingxueCard(props) { return TingxuePanel(props, 'card') }
-
-    /** 设置侧边栏独立页形态。 */
-    function TingxueSection(props) { return TingxuePanel(props, 'section') }
 
     /** 一个字段行：控件 + 覆盖标记 + 重置。 */
     function FieldRow(input) {
@@ -548,7 +562,10 @@ window.__ModuleLoader__.load({
       const scope = ctx.settingsScope.bind({ namespace: TINGXUE_NS })
       const card = createCardController(scope)
 
-      // 主入口：设置侧边栏里的独立一页（导航项「听雪」，排在 agent-presets 之后）
+      // 唯一入口：设置侧边栏里的独立一页（导航项「听雪」，排在 agent-presets 之后）。
+      // 不再注册 settings.plugin.item 的第二张卡片：两处渲染同一份设置，纯重复。
+      // Host 半侧的命名空间注册（src/settings/index.mjs）与浏览器侧入口无关，
+      // 所以去掉卡片不影响保存链路。
       ctx.slots.inject('settings.section', () => ctx.slots.register({
         name: 'settings.section',
         id: 'tingxue',
@@ -557,14 +574,6 @@ window.__ModuleLoader__.load({
         locale: NS,
         inject: () => card.inject(),
       }, TingxueSection))
-
-      // 次入口：插件配置标签页里的卡片。与上一处共用同一个 settings scope，永远同步。
-      ctx.slots.inject('settings.plugin.item', () => ctx.slots.register({
-        name: 'settings.plugin.item',
-        key: TINGXUE_NS,
-        locale: NS,
-        inject: () => card.inject(),
-      }, TingxueCard))
     }
 
     exports.apply = apply
