@@ -359,23 +359,58 @@ test('写盘争用重试预算与「先绑定后建会话」（旧代码会失�
   check('F1 回执明说已清空绑定，不能只回一句「已退出 agent 模式」',
     /已清空绑定|既未回绑也没能清空/.test(f1Text) && !/^已退出 agent 模式，回到日常聊天。$/.test(f1Text.trim()),
     f1Text.replace(/\n/g, ' | ').slice(0, 140))
-  check('F1 绑定不得停留在已销毁的隔离会话', true, `原 agentSid=${agentSid5}`)
+  // 真断言（原先是硬编码 true 的空断言，白占一行且不检验任何东西）：
+  // 防御目标 = 绑定既不能指向已销毁的隔离会话，也不能停留在「无绑定」以外的错误值上。
+  check('F1 绑定不得停留在已销毁的隔离会话',
+    (await getBinding('qq', 'U', f1File)) !== agentSid5,
+    `键值=${JSON.stringify(await getBinding('qq', 'U', f1File))} 原 agentSid=${agentSid5}`)
 
   console.log('')
-  console.log('=== 13) chatSessionId 为空 → 直接清键并报 unresolved（F1 另一分支）===')
-  const f1bFile = join(dir, 'f1b-state.json')
-  await mkdir2(f1bFile, { recursive: true }) // 写盘必然失败 → 清键也失败 → unresolved
+  console.log('=== 13) /agentstop：回绑与清空双双失败 → 必须报 unresolved（F1 的 unresolved 分支）===')
+  // 覆盖目标：writeExitBinding 的 `unresolved` 分支（回绑失败 **且** 清空也失败）。
+  // writeExitBinding 只在 /agentstop 路径上运行，所以本组必须真的走 /agentstop。
+  // 构造方式：
+  //   ① 先在**可写**路径上正常 /agentstart 进入 agent 模式（前置断言 mode=agent）；
+  //   ② 把 chatSessionId 清掉 → handleStop 会走「无可信聊天会话可回绑」那条分支
+  //      （原语意：回绑目标不存在 = 回绑失败）；
+  //   ③ 把 notifierStateFile 换成同名目录 → 清键的写盘也稳定失败（EPERM）。
+  // 于是「回绑失败 + 清空失败」两条同时成立 → unresolved。
+  const f1cFile = join(dir, 'f1c-state.json')
+  await writeFile2(f1cFile, JSON.stringify({ 'bind:qq:U': 'session-chat-aaa' }))
   const data6 = join(dir, 'data6')
-  const state6 = await createStateManager({ dataDir: data6 }) // 刻意不设 chatSessionId
+  const state6 = await createStateManager({ dataDir: data6 })
+  await state6.setChatSessionId('session-chat-aaa')
+  const cfg6 = {
+    agentStartKeyword: '/agentstart', agentStopKeyword: '/agentstop',
+    profilePath: join(process.cwd(), '听雪档案.txt'),
+    dataDir: data6, notifierStateFile: f1cFile, channel: 'qq', userId: 'U',
+  }
+  const agents6 = { async create(o) { return { id: o.sessionId, dispose: async () => {} } } }
   const cmds6 = createCommandHandler({
-    state: state6, notifier: { async push() {} },
-    agents: { async create() { return { id: 'x', dispose: async () => {} } } },
-    config: { ...cfg5, dataDir: data6, notifierStateFile: f1bFile },
+    state: state6, notifier: { async push() {} }, agents: agents6, config: cfg6,
     logger: { warn: () => {}, info: () => {} },
   })
-  const r6 = await cmds6.handle('/agentstart')
-  check('无 chatSessionId 时 /agentstart 被消费且不进 agent 模式',
-    r6 === true && state6.mode === 'chat', `mode=${state6.mode}`)
+  await cmds6.handle('/agentstart')
+  check('第13组前置：已进入 agent 模式', state6.mode === 'agent', `mode=${state6.mode}`)
+  // ② 清掉 chatSessionId（回绑目标不存在）
+  await state6.setChatSessionId(null)
+  // ③ 写盘目标变目录（清键也失败）
+  await rm(f1cFile, { force: true })
+  await mkdir2(f1cFile, { recursive: true })
+  const f1cPushed = []
+  const cmds6b = createCommandHandler({
+    state: state6, notifier: { async push(m) { f1cPushed.push(String(m?.content ?? '')) } },
+    agents: agents6, config: cfg6, logger: { warn: () => {}, info: () => {} },
+  })
+  await cmds6b.handle('/agentstop')
+  const f1cText = f1cPushed.join('\n')
+  check('第13组 mode 回到 chat', state6.mode === 'chat', `mode=${state6.mode}`)
+  check('第13组：回执出现 unresolved 文案「既未回绑也没能清空」',
+    /既未回绑也没能清空/.test(f1cText),
+    f1cText.replace(/\n/g, ' | ').slice(0, 160))
+  check('第13组：回执不得只是「已退出 agent 模式，回到日常聊天。」',
+    !/^已退出 agent 模式，回到日常聊天。$/.test(f1cText.trim()),
+    f1cText.replace(/\n/g, ' | ').slice(0, 160))
 
   console.log('')
   console.log('=== 14) 绑定成功但 agents.create 失败 → 绑定回滚到原值（F2）===')

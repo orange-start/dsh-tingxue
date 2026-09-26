@@ -104,7 +104,15 @@ export function createCommandHandler(deps) {
    * 也就不可能留下空壳。绑定成功后才 create；create 失败则把绑定回滚到原值。
    *
    * @returns {Promise<{ok: boolean, sessionId?: string, reason?: string, bindError?: Error,
-   *   bindDiagnosis?: string, bindSuggestion?: string, rolledBack?: boolean}>}
+   *   bindDiagnosis?: string, bindSuggestion?: string, bindAttempts?: number, bindElapsedMs?: number,
+   *   hadPrevBinding?: boolean, prevBindingReadError?: Error|null,
+   *   rollbackOk?: boolean,
+   *   rolledBack?: 'restored'|'cleared'|'failed'}>}
+   *   语义说明（避免注释与实现漂移）：
+   *   - `rolledBack: 'restored'` —— 原本有绑定，已恢复原值；
+   *   - `rolledBack: 'cleared'`  —— 原本无绑定（或原绑定读取失败），已删除本次写入的键；
+   *   - `rolledBack: 'failed'`   —— 回滚写盘本身失败（QQ 可能仍指向失败会话）；
+   *   - 绑定写盘失败时返回 `ok:false` + `bound:false`（**不创建会话**），此时不含 rolledBack。
    */
   async function createIsolatedAgent() {
     if (!agents || typeof agents.create !== 'function') {
@@ -214,6 +222,10 @@ export function createCommandHandler(deps) {
    * 退出 agent 模式：归档 + 删文件 + dispose 隔离会话 + 自动 bind 回聊天会话。
    */
   async function handleStop() {
+    // 0. 复位上一次的退出回执结果。
+    //    不复位会留一个因果耦合：exitBinding 会跨调用残留，
+    //    若将来有人改掉上面那道 isAgentMode() 早退，残留值会被误读成本次的结果。
+    exitBinding = null
     // 1. 归档对话到记忆库 + 删文件（由 agent 服务处理）
     try {
       const rounds = (deps.pendingAgentRounds ?? []).filter((r) => r.user || r.assistant)

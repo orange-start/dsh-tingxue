@@ -19,7 +19,7 @@ import { findPort, readBody, sendJson } from '../http/index.mjs'
 /**
  * 创建记忆服务。
  * @param {object} deps - { store, model, graph, profilePath, logger }
- * @param {object} config - { memoryServiceHost, memoryServicePort }
+ * @param {object} config - { memoryServiceHost, memoryServicePort, memoriesIdentity }
  */
 export function createMemoryService(deps = {}, config = {}) {
   const { store, model, graph, profilePath, logger } = deps
@@ -28,6 +28,18 @@ export function createMemoryService(deps = {}, config = {}) {
 
   const host = config.memoryServiceHost ?? '127.0.0.1'
   const port = config.memoryServicePort ?? 8766
+  /**
+   * 本记忆服务的**权威身份**（t13）：写入与检索都用它，**不读客户端传的 identity**。
+   *
+   * 为什么必须是服务端权威：若 identity 由请求体决定，客户端改一个字段就能把记忆写进
+   * 别人名下、或把别人的记忆检索出来——那样「加了 identity 过滤」也等于没有隔离。
+   *
+   * 默认 `'user'`：与 `store.addMemory` 的默认 identity 一致，**单用户场景行为不变**，
+   * 且既有（无 identity 写入的）库存仍可被检索到，无需数据迁移。
+   * 多来源部署时在 profile 配置里把它设成该来源的稳定标识（例如 `qq:<userId>`）。
+   */
+  const serverIdentity = String(config.memoriesIdentity ?? '').trim() || 'user'
+
   let server = null
   let boundUrl = ''
 
@@ -68,7 +80,12 @@ export function createMemoryService(deps = {}, config = {}) {
       const text = String((body && body.text) ?? '').trim()
       if (!text) return sendJson(res, 400, { ok: false, error: 'text 必填' })
       const scene = String((body && body.scene) ?? 'chat').trim() || 'chat'
-      const identity = String((body && body.identity) ?? '').trim()
+      // **identity 由服务端决定，不接受客户端伪造**（t13 修复）。
+      // 旧实现取 body.identity：客户端换个字段就能把记忆写进别人的名下，
+      // 于是「加了 identity 过滤」也等于没有隔离——钥匙插在门上。
+      // 客户端若仍传 identity，仅在响应里回显为 ignoredIdentity 以便排查，不参与写入。
+      const clientIdentity = String((body && body.identity) ?? '').trim()
+      const identity = serverIdentity
       const source = String((body && body.source) ?? 'astrbot').trim() || 'astrbot'
       try {
         // 记忆正文 + 向量尽快落库并立刻返回：实体抽取是慢模型调用，
@@ -87,7 +104,12 @@ export function createMemoryService(deps = {}, config = {}) {
             await graph.ingest(text, { source })
           } catch (e) { warn(`实体抽取失败: ${e.message}`) }
         }).catch(() => {})
-        return sendJson(res, 200, { ok: true, memoryId, entityIds: [], newEntities: 0, async: true })
+        const payload = { ok: true, memoryId, entityIds: [], newEntities: 0, async: true, identity }
+        if (clientIdentity && clientIdentity !== identity) {
+          payload.ignoredIdentity = clientIdentity
+          warn(`客户端传入的 identity=${clientIdentity} 已被忽略，按服务端 identity=${identity} 写入`)
+        }
+        return sendJson(res, 200, payload)
       } catch (e) {
         return sendJson(res, 500, { ok: false, error: e.message })
       }
@@ -102,8 +124,9 @@ export function createMemoryService(deps = {}, config = {}) {
       try {
         if (!store || !model) throw new Error('记忆服务未就绪')
         const vec = await model.embed([q])
-        const results = await store.searchMemories(vec[0], { limit, scene })
-        return sendJson(res, 200, { ok: true, results })
+        // 同样强制服务端 identity：检索永远只在本来源自己的记忆里做（不跨来源串味）。
+        const results = await store.searchMemories(vec[0], { limit, scene, identity: serverIdentity })
+        return sendJson(res, 200, { ok: true, results, identity: serverIdentity })
       } catch (e) {
         return sendJson(res, 500, { ok: false, error: e.message })
       }

@@ -60,3 +60,63 @@ test('最新信息有界', async () => {
     assert.equal(latest[0].text, '摘要7') // 最新在前
   })
 })
+
+// ── t13 回归：检索必须按 identity 过滤，不得串到他人记忆 ────────────────
+//
+// 缺陷原形（修复前 searchMemories 只有 scene 过滤）：
+//   写入时分人（addMemory 的 identity），读出时不分人 → 任何一次检索都返回混合记忆。
+//   实测（LanceDB 真实库，同一向量）：owner 的 `user` 记忆与另一来源的 `qq:999` 记忆一起返回。
+
+test('t13: searchMemories 默认只返回同 identity 的记忆（不串到他人）', async () => {
+  await withStore(async (store) => {
+    await store.addMemory({ text: '主人喜欢喝咖啡', vector: [0.1, 0.2, 0.3], scene: 'chat', identity: 'user' })
+    await store.addMemory({ text: '别人的隐私：他住在某地', vector: [0.1, 0.2, 0.3], scene: 'chat', identity: 'qq:999' })
+
+    const hits = await store.searchMemories([0.1, 0.2, 0.3], { limit: 10 })
+    const texts = hits.map((h) => h.text)
+    assert.ok(!texts.some((t) => t.includes('别人的隐私')),
+      `检索串到了他人记忆：${texts.join(' | ')}`)
+    assert.equal(hits.length, 1, `默认只应返回 owner 的记忆，实际 ${hits.length} 条`)
+    assert.equal(hits[0].text, '主人喜欢喝咖啡')
+    assert.ok(hits.every((h) => h.identity === 'user'), '返回结果的 identity 必须一致')
+  })
+})
+
+test('t13: 显式 identity 只命中该身份；不存在的身份返回空', async () => {
+  await withStore(async (store) => {
+    await store.addMemory({ text: 'A 的记忆', vector: [0.1, 0.2, 0.3], scene: 'chat', identity: 'qq:A' })
+    await store.addMemory({ text: 'B 的记忆', vector: [0.1, 0.2, 0.3], scene: 'chat', identity: 'qq:B' })
+
+    const a = await store.searchMemories([0.1, 0.2, 0.3], { limit: 10, identity: 'qq:A' })
+    assert.equal(a.length, 1)
+    assert.equal(a[0].text, 'A 的记忆')
+
+    const b = await store.searchMemories([0.1, 0.2, 0.3], { limit: 10, identity: 'qq:B' })
+    assert.equal(b.length, 1)
+    assert.equal(b[0].text, 'B 的记忆')
+
+    const none = await store.searchMemories([0.1, 0.2, 0.3], { limit: 10, identity: 'qq:NOBODY' })
+    assert.equal(none.length, 0, '不存在的身份必须返回空，而不是全库')
+  })
+})
+
+test('t13: identity 默认值与 addMemory 默认一致（既有库存无需迁移，单用户行为不变）', async () => {
+  await withStore(async (store) => {
+    // 不传 identity 写入 → 走 addMemory 默认
+    await store.addMemory({ text: '旧库存（无 identity 显式传入）', vector: [0.1, 0.2, 0.3], scene: 'chat' })
+    // 检索也不传 identity → 走 searchMemories 默认，必须能搜到旧库存
+    const hits = await store.searchMemories([0.1, 0.2, 0.3], { limit: 10 })
+    assert.equal(hits.length, 1, '默认默认必须自洽：旧库存仍可被检索（否则单用户场景回归）')
+    assert.equal(hits[0].identity, 'user')
+  })
+})
+
+test('t13: identity 含单引号不会破坏过滤（字面量转义）', async () => {
+  await withStore(async (store) => {
+    await store.addMemory({ text: '带引号身份', vector: [0.1, 0.2, 0.3], scene: 'chat', identity: "qq:o'brien" })
+    await store.addMemory({ text: '别的身份', vector: [0.1, 0.2, 0.3], scene: 'chat', identity: 'qq:other' })
+    const hits = await store.searchMemories([0.1, 0.2, 0.3], { limit: 10, identity: "qq:o'brien" })
+    assert.equal(hits.length, 1, `单引号身份应被正确转义，实际 ${hits.length} 条`)
+    assert.equal(hits[0].text, '带引号身份')
+  })
+})

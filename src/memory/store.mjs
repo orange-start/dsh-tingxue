@@ -103,17 +103,40 @@ export async function createMemoryStore(config, deps = {}) {
     return id
   }
 
-  /** 语义检索记忆（按当前输入）。 */
-  async function searchMemories(vector, { limit = 8, scene } = {}) {
-    let q = memories.query().nearestTo(vector).limit(limit)
-    if (scene) q = q.where(`scene = '${scene}'`)
-    const rows = await q.toArray()
+  /**
+   * 语义检索记忆（按当前输入）。
+   *
+   * **必须按 identity 过滤**（t13 修复）：写入时就分了人（addMemory 的 identity），
+   * 读出时若不过滤，一旦有第二个来源接入，任何一次检索都会返回**混合记忆**。
+   * 实测（LanceDB 真实库）：owner 的 `user` 记忆与另一来源的 `qq:999` 记忆会被一起返回。
+   *
+   * 默认值取 `'user'`——与 addMemory 的默认 identity 一致，因此**单用户场景行为不变**：
+   * 既有的无 identity 写入的库仍能被搜到；扫描旧库时不需要数据迁移。
+   * 需要检索别的来源时显式传 identity（例如按 QQ 号分人）。
+   *
+   * @param {number[]} vector
+   * @param {{limit?: number, scene?: string, identity?: string|null}} [opts]
+   *   identity 传 `null` 表示不过滤（仅用于诊断/管理场景，勿用于面向用户的检索）。
+   */
+  async function searchMemories(vector, { limit = 8, scene, identity = 'user' } = {}) {
+    let q = memories.query().nearestTo(vector)
+    // identity 过滤先于 limit（实测：where().limit() 是先过滤再取前 N 条）
+    if (identity !== null && identity !== undefined && String(identity) !== '') {
+      q = q.where(`identity = '${sqlStr(identity)}'`)
+    }
+    if (scene) q = q.where(`scene = '${sqlStr(scene)}'`)
+    const rows = await q.limit(limit).toArray()
     return rows.map((r) => ({
       id: r.id, text: r.text, scene: r.scene, identity: r.identity,
       source: r.source, createdAt: Number(r.createdAt ?? 0),
       entityIds: String(r.entityIds ?? '').split(',').filter(Boolean),
       distance: r._distance,
     }))
+  }
+
+  /** SQL 字面量转义：identity/scene 会进 where 子句，单引号必须转义（否则可被注入）。 */
+  function sqlStr(value) {
+    return String(value).replace(/'/g, "''")
   }
 
   /** 按精确 ID 删除记忆（用户主动删除）。 */
